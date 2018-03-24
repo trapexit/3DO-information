@@ -1,0 +1,452 @@
+Description of the Sega FILM/CPK File Format
+by Mike Melanson (mike at multimedia.cx)
+v1.4: March 13, 2003
+
+
+  Copyright (c) 2002-2003 Mike Melanson
+  Permission is granted to copy, distribute and/or modify this document
+  under the terms of the GNU Free Documentation License, Version 1.2
+  or any later version published by the Free Software Foundation;
+  with no Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
+  A copy of the license is included in the section entitled "GNU
+  Free Documentation License".
+
+
+Contents
+--------
+ * Introduction
+ * Sega Saturn CPK File Format
+ * FILM Framerate Calculation
+ * FILM Deviant Cinepak (CVID) Video Data
+ * FILM Audio Data
+ * Early Sega CD FILM Files
+ * Strategy For Detecting FILM File Types
+ * Appendix A: FILM File Versions
+ * References
+ * Changelog
+ * GNU Free Documentation License
+
+
+Introduction
+------------
+FILM is a multimedia container file format developed by Sega for use on
+its early CD-ROM home video game consoles. Based on analysis of a number
+of Sega CD and Saturn games, it appears that the format was first
+developed sometime during the era of the Sega CD, the first CD-based
+video game console. There are many early variations of the FILM format
+observed on a number of Sega CD titles. Further, early FILM files have
+been observed on at least one 3DO game (Lemmings).
+
+The Sega Saturn video game console, released in 1995, was also
+CD-ROM-based and apparently offered developers a standardized SDK for
+full motion video (FMV) playback using a modified variant of the
+well-known Cinepak video codec.
+
+It is possible to store both audio and video in a FILM file.
+Alternatively, the format is able to handle either video without audio,
+or vice versa.
+ 
+
+Sega Saturn CPK File Format
+---------------------------
+All multi-byte numbers are stored in big endian format.
+
+Many Sega Saturn CD-ROM games use this file format to store frames of a
+Cinepak-compressed video interleaved with uncompressed PCM audio. When
+this is the case, the files will typically have the extension .CPK
+(which is why FILM files are usually known as CPK files). Sometimes,
+audio-only FILM files will have a .SND extension.
+
+The general format is laid out as follows:
+
+ +-----------------------+
+ | +-------------------+ |
+ | | FILM header       | |
+ | |                   | |
+ | | +---------------+ | |
+ | | | FDSC chunk    | | |
+ | | +---------------+ | |
+ | |                   | |
+ | | +---------------+ | |
+ | | | STAB chunk    | | |
+ | | +---------------+ | |
+ | |                   | |
+ | +-------------------+ |
+ |                       |
+ | Audio or Video Data   |
+ |  ..                   |
+ |  ..                   |
+ +-----------------------+
+
+A FILM file will usually consist of a header followed by interleaved audio
+and video chunks. The FILM header has the following structure:
+
+  bytes 0-3    'FILM' signature
+  bytes 4-7    length of FILM header (including signature and length
+               fields)
+  bytes 8-11   FILM format version in ASCII (ex: '1.01' or '1.07')
+  bytes 12-15  unknown (may be reserved and set to 0)
+  bytes 16-n   remainder of FILM header
+
+Different Sega Saturn games include FILM files with a variety of FILM
+version numbers. Sometimes, the same game will include FILM files with a
+variety of format versions. A version number implies that there has been
+some change to the file format, but I have yet to observe any
+differences between different FILM file versions (except possibly for
+version '1.09'; see STAB chunk for more details). See Appendix A for a
+small sample of Sega Saturn games and FILM file versions they contain.
+
+The remainder of the FILM header contains a number of chunks describing
+the media data in the file. Usually, the number of chunks is 2: A FDSC
+chunk and a STAB chunk.
+
+A FDSC chunk contains file description information. The chunk format is
+as follows:
+
+  bytes 0-3    'FDSC' chunk signature
+  bytes 4-7    length of FDSC chunk (including signature and length
+               fields); an FDSC chunk should be 32 (0x20) bytes long
+  bytes 8-11   FOURCC of video codec (usually 'cvid' for Cinepak or null
+               for no video)
+  bytes 12-15  height of video frames
+  bytes 16-19  width of video frames
+  byte 20      unknown, but always seems to be 0x18 (24)
+  byte 21      number of audio channels
+  byte 22      audio sampling resolution in bits (either 8 or 16)
+  byte 23      unknown
+  bytes 24-25  audio sampling frequency in Hz
+  bytes 26-31  unknown (may be reserved and set to 0)
+
+Note that the height field precedes the width field, which is unusual since
+width usually precedes height when expressing video resolution.
+
+The fields pertaining to audio (channels, bits, and sample rate) will all
+be 0 if there is no audio present in the file.
+
+A STAB chunk contains a table of media sample information. The chunk
+format is as follows:
+
+  bytes 0-3    'STAB' chunk signature
+  bytes 4-7    length of STAB chunk (including signature and length
+               fields)
+  bytes 8-11   framerate base frequency in Hz
+  bytes 12-15  number of entries in the sample table
+  bytes 16-n   sample table
+
+Note that the length field ought to take the first 16 chunk bytes into
+account. However, it has been observed from some games (notably Burning
+Rangers using '1.09' version FILM files) that the length field sometimes
+does not account for these 16 bytes.
+
+The sample table consists of a series of 16-byte sample records. Each
+record is laid out as follows:
+
+  bytes 0-3    offset of sample chunk from beginning of sample data
+  bytes 4-7    length of sample chunk
+  bytes 8-11   sample info 1
+  bytes 12-15  sample info 2
+
+The offset is the offset from the start of the sample data, not the
+absolute offset in the file. The length of the FILM header implicitly
+serves as a pointer to the beginning of the sample data in the file.
+
+If the sample info 1 field is set to all ones, the sample is an audio
+chunk. Otherwise, it is a video chunk. If it is a video chunk, the top
+bit of the 32-bit number specifies whether the chunk is an inter-coded
+or an intra-coded frame. 0=intra-coded (a.k.a. keyframe), 1=inter-coded.
+This is useful for seeking since it is a good idea to only jump to key
+frames when seeking through a file.
+
+The rest of the first sample info field and the second sample info field 
+pertain to framerate calculation. Refer to the section on FILM framerate
+calculation for more information on proper FILM playback using these
+sample info fields.
+
+
+FILM Framerate Calculation
+--------------------------
+The STAB chunk contains a framerate base frequency in bytes 8-11. This
+frequency is expressed in ticks/second (Hz). Every video chunk has a frame
+tick count. For example, movie files in Panzer Dragoon I & II (FILM format
+versions 1.04 and 1.07, respectively) have a base frequency of 600 Hz. The
+frames have tick counts of 0, 20, 40, 60, 80, etc. Thus, there are 20
+ticks between each successive frame.
+
+  (600 ticks/sec) / (20 ticks/frame) = 30 frames/second
+
+However, not all FILM files exhibit such a nice, even framerate. Myst,
+for example, contains FILM files (version 1.01) with a base frequency of
+30 Hz. Some of the frames skip 2, then 3 ticks. Here's a sample tick
+count progression: 0, 2, 5, 7, 10, 12, 15, 17...
+
+Each STAB record has 2 32-bit sample info fields. For an audio chunk,
+sample info 1 is all ones and sample info 2 is always 1. For a video
+chunk, sample info 1 contains the keyframe bit (as described in the STAB
+section) and the absolute timestamp in clock ticks of the video frame
+with respect to the file's base frequency clock. The sample info 2 field
+contains the number of clock ticks until the next frame is rendered.
+This type of information would be particularly useful in an
+interrupt-driven, real-time multimedia system like, for instance, a
+video game console.
+
+It is important to note that an application that knows how to play FILM
+files can not assume a constant framerate. The files will not play
+correctly with such a method. It is also important to note that
+converting FILM files to file formats that only support constant
+framerates (such as AVI) is not a winning strategy. The converted file
+will not play correctly.
+
+
+FILM Deviant Cinepak (CVID) Video Data
+--------------------------------------
+The Cinepak data inside of a FILM file can not be decoded with a general
+purpose Cinepak decoding algorithm. It is reasonable to think that this
+was no accident. If FILM files contained standard CVID data, the files
+could be played on any computer that had some kind of Cinepak decoder
+implementation.
+
+This document assumes familiarity with the Cinepak algorithm. For
+information on the entire decoding algorithm and data format, see the
+references at the end of this document.
+
+A CVID chunk is supposed to start with a 10-byte chunk header:
+
+  byte 0     flags
+  bytes 1-3  length of CVID data
+  bytes 4-5  width of coded frame
+  bytes 6-7  height of coded frame
+  bytes 8-9  number of coded strips
+
+Following the chunk header ought to be the first byte of the first strip
+header. In the deviant CVID data stored in a FILM file, there appear to be
+an extra 2 bytes at the end of the chunk header, bringing the total header
+size to 12 bytes.
+
+The length of the chunk as reported by the deviant CVID data chunk is also
+incorrect. The length field is supposed to report the length of the entire
+chunk including the header. The deviant CVID data reports a length that is
+8 bytes too short. That is, the length reported in the CVID chunk is 8
+bytes shorter than the length reported in the corresponding record of the
+FILM file's STAB chunk. The STAB chunk length takes into account the proper
+length, including the extra 2 bytes at the end of the chunk header.
+
+Finally, the deviant CVID data appears to throw a potential decoder one
+more curveball with what appears to be data chunks that don't have, for
+lack of a better term, properly divisible chunk lengths. For example, a
+0x2000 chunk commonly has a length of 0x604 bytes, which provides 2 bytes
+for the chunk ID, 2 bytes for the chunk length, and 0x600 bytes for 256
+6-byte vectors. However, the deviant CVID data might have a 0x2000
+chunk with a length of 0x600 bytes, which provides for the 4 chunk
+preamble bytes and 0x5FC bytes for the 6-byte vectors which is not evenly
+divisible by 6. This apparently confuses Cinepak decoders. The solution in
+this case is to unpack 255 6-byte vectors and then skip 2 bytes before
+attempting to decode the next chunk in the strip.
+
+
+FILM Audio Data
+---------------
+Audio data in a FILM file can be stored in a variety of formats which
+are mostly linear PCM variants.
+
+CPK files from Sega Saturn games almost always contain linear PCM audio.
+The one known exception is Burning Rangers. This game apparently uses an
+ADPCM format. The precise data format has yet to be determined.
+
+Saturn CPK audio data is always stored as signed data. This is important
+to remember when playing 8-bit CPK audio data on a PC which generally
+expects 8-bit data to be unsigned.
+
+When a CPK file contains 16-bit audio data, the individual PCM samples
+are stored in big endian format. Again, this is important to remember
+when playing on a PC since a PC will generally expect little endian
+16-bit data.
+
+If the CPK audio data is stereo (8- or 16-bit), the channel data is
+non-interleaved. Usually, stereo data is stored interleaved as a left
+channel sample followed by a right channel sample as follows:
+
+  L R L R L R L R ...
+
+In a stereo CPK file, for each audio data chunk, the first half of the
+chunk contains left channel samples and the second half contains right
+channel samples. The likely reason for scheme is that console audio
+hardware such as that found on the Sega Saturn usually features a number
+of audio channels which can each play a mono PCM stream at a particular
+pan position (e.g., from 0-15 where 0 is extreme left, 7 and 8 are
+center, and 15 is extreme right). In order to play a stereo PCM stream,
+one physical audio channel must be assigned to extreme left while a
+second channel is assigned to extreme right. Then the appropriate
+channel samples are sent to the correct channel. Since these files are
+optimized for playback on the Sega Saturn it makes sense to arrange the
+audio samples like this.
+
+The Sega CD audio playback hardware ostensibly supports native
+sign/magnitude audio samples. All Sega CD games studied use this format
+to store audio data. Sign/magnitude number coding for 8-bit numbers
+means that for each 8-bit byte:
+
+  bit 7      sign
+  bits 6-0   magnitude (value)
+
+This is slightly different from twos complement encoding which is how
+computers typically store signed numbers. For example, in the
+sign/magnitude scheme, 0x81 represents -1 and 0xFF represents -127. 0x01
+and 0x7F still represent 1 and 127, respectively, just as in unsigned,
+and signed twos complement coding.
+
+
+Early Sega CD FILM Files
+------------------------
+Some Sega CD games as well as at least one 3DO game (Lemmings) use an
+early version of the FILM format. Unfortunately, there are a lot of
+variations and a general-purpose player will probably require a lot of
+special-case logic in order to deal with every known circumstance.
+
+The first difference in these early files is the version number. These
+early files do not have ASCII-readable version fields. Some have NULL or
+other non-ASCII versions. This helps automatic detection.
+
+The second major difference that all of these early files appear to
+exhibit is an abbreviated FDSC chunk which omits any audio information.
+Thus, the FDSC chunk is laid out as follows:
+
+  bytes 0-3    'FDSC' chunk signature
+  bytes 4-7    length of FDSC chunk (including signature and length
+               fields); this FDSC chunk is 20 (0x14) bytes long
+  bytes 8-11   FOURCC of video codec
+  bytes 12-15  height of video frames
+  bytes 16-19  width of video frames
+
+The lack of audio information leaves room for experimentation. The
+following is a list of known games which have early FILM files along
+with any special quirks observed.
+
+On the Lemmings 3DO game, there are 2 files with the .film extension
+(the 3DO game console uses a custom filesystem which allows for file
+extensions longer than 3 characters). The files have a NULL version
+field. The files use CVID data which is deviant in the same manner as
+typical FILM CVID data with an added quirk: There appear to be 6 extra
+bytes between the end of the CVID chunk header and the start of the
+first strip header, rather than the usual 2 extra bytes. The Lemmings
+FILM files also contain 8-bit signed, monaural PCM data with a sampling
+frequency of 22050 Hz.
+
+The Batman and Robin Sega CD title has a series of files with the
+extension .s. They are early FILM files with a version field of
+0x00020000. Further, bytes 12-15 of the main FILM header are not set to
+0 as is usually seen in FILM files. The files have a video fourcc of
+'Seg4' which is probably Cinepak for Sega or a variant thereof. The
+files have STAB chunks which are a constant 0x20 (32) bytes long. This
+consists of the 'STAB' signature, a 4-byte chunk length, the base
+playback frequency, a sample count, and one 16-byte sample record. These
+files do not store the sample table in one place. Instead, they store
+one sample record followed immediately by the data corresponding to that
+sample record. Repeat until the end of the file.
+
+The Dracula Unleashed Sega CD title contains a series of files beginning
+with video?? with no file extension. They are early FILM files with a
+NULL version field, abbreviated FDSC chunk, and 'sega' as a video codec
+(Cinepak for Sega). The audio is 8-bit sign/magnitude audio with a
+sampling frequency of 16000 Hz.
+
+Jurassic Park for the Sega CD has a large number of files with the file
+extension .MVD. They are early FILM files with the same characteristics
+as the FILM files in Dracula Unleashed.
+
+The Tomcat Alley title for the Sega CD has a massive data file called
+tca.bin. Inside this data file are a lot of FILM files. These files have
+NULL version fields. The files have abbreviated FDSC chunks and the
+'sega' video fourcc. They also have short STAB chunks with an Apple
+Quicktime 'mdia' atom appended at the end.
+
+
+Strategy For Detecting FILM File Types
+--------------------------------------
+There are quite a few variations and deviations in the FILM file format.
+This section presents logic for detecting and dealing with the
+variations.
+
+File extension detection is not especially useful since many games will
+masquerade their files with another extension. The best method to
+determine whether a file is a FILM file is to read the first 4 bytes and
+check for the signature 'FILM'.
+
+Upon validating the signature:
+
+  * read the file version in the FILM header
+  * if the file version consists of ASCII characters
+    * if the file version is '1.09', watch out for bad length of STAB
+      chunk as well as ADPCM audio
+    * load as standard FILM file, be sure to feed CVID data through
+      Cinepak decoder that can handle it
+  * if the file version is 0x00020000
+    * read the video fourcc
+    * if the video fourcc is 'Seg4'
+      * assume the file comes from Batman and Robin
+  * if the file version is NULL
+    * read the video fourcc
+    * if the video fourcc is 'cvid'
+      * assume the file comes from the Lemmings 3DO game
+      * be prepared to decode special variant of modified CVID data
+      * assume 8-bit, mono, 22050 Hz PCM audio
+    * if the video fourcc is 'sega'
+      * assume the file comes from one of several Sega CD games that
+        agreed on this format
+      * assume 8-bit, mono, 16000 Hz sign/magnitude audio
+
+
+Appendix A: FILM File Versions
+------------------------------
+These are the FILM format version numbers I've observed from a small
+sample of Sega Saturn games:
+
+ * Astal: '0.91', '1.06'
+ * Burning Rangers: '1.09'
+ * Myst: '1.01'
+ * Nights Into Dreams: '0.91', '1.01', '1.06', '1.07', '1.08'
+ * Panzer Dragoon: '1.04'
+ * Panzer Dragoon II: Zwei: '1.07'
+ * Sega Saturn Bootleg Sampler: '1.04'
+ * Virtua Cop: '1.08'
+
+
+References
+----------
+Dr. Tim Ferguson's Description of the Cinepak Algorithm
+http://www.csse.monash.edu.au/~timf/videocodec/cinepak.txt
+
+
+Changelog
+---------
+v1.4: March 13, 2003
+- licensed under GNU Free Documentation License
+- revised and expanded the audio information
+- created new section about early FILM file types
+- moved "Lemmings 3DO Quirks" section into early FILM file types section
+- added strategy section for detecting FILM file types
+
+v1.3: March 30, 2002
+- added section describing quirks of FILM files on Lemmings 3DO game
+
+v1.2: March 16, 2002
+- revised information about framerate calculation
+- added STAB chunk length quirk
+- added note about possible ADPCM audio
+- added Appendix A: FILM File Versions
+
+v1.1: February 9, 2002
+- added better (but not perfect) speculation regarding FPS
+- added quirks about Cinepak data
+- added audio formats
+- added keyframe bit
+- removed incorrect observation about chunk length from sample table being
+8 bytes too long; the new section on Deviant Cinepak Data discusses chunk
+length discrepancies
+
+v1.0: January 17, 2002
+- initial release
+
+
+GNU Free Documentation License
+------------------------------
+see http://www.gnu.org/licenses/fdl.html
